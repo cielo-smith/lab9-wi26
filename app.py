@@ -134,6 +134,31 @@ def register(username: str = Form(...), password: str = Form(...), conn=Depends(
 #       - Create a session: generate a uuid4 token, insert into sessions table
 #       - Set the session_token as an httponly cookie using response.set_cookie()
 #       - Redirect to "/posts" on success, return 401 on failure
+@app.post("/login")
+def login(username: str = Form(...), password: str = Form(...), conn=Depends(get_db)):
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, password_hash FROM users WHERE username = %s", (username,))
+
+    user = cursor.fetchone()
+
+    if not user or not bcrypt.checkpw(password.encode(), user["password_hash"].encode()):
+        cursor.close()
+
+    session_token = str(uuid.uuid4())
+
+    cursor.execute(
+        "INSERT INTO sessions (user_id, session_token) VALUES (%s, %s)",
+        (user["id"], session_token),
+    )
+
+    conn.commit()
+    cursor.close()
+
+    response = RedirectResponse(url="/posts", status_code=303)
+    response.set_cookie(key="session_token", value=session_token, httponly=True, secure=True)
+    return response
+
+
 
 @app.post("/logout")
 def logout(session_token: str | None = Cookie(None), conn=Depends(get_db)):
@@ -147,7 +172,23 @@ def logout(session_token: str | None = Cookie(None), conn=Depends(get_db)):
     return response
 
 # TODO: Add GET /me endpoint that returns the current user's info using get_current_user dependency
+@app.get("/me")
+def get_me(current_user=Depends(get_current_user)):
+    return current_user
+
 # TODO: Add PUT /me/password endpoint that lets the current user change their password
+@app.put("/me/password")
+def change_password(new_password: str = Form(...), conn=Depends(get_db), current_user=Depends(get_current_user)):
+    hashed = bcrypt.hashpw(new_password.encode(), bcrypt.gensalt())
+
+    cursor = conn.cursor()
+
+    cursor.execute("UPDATE users SET password_hash = %s WHERE id = %s", (hashed.decode(), current_user["id"]))
+
+    conn.commit()
+    cursor.close()
+
+    return {"detail": "password updated"}
 
 
 @app.post("/posts")
